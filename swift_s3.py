@@ -58,13 +58,13 @@ def swift_get_quotas(project_name):
         try:
             quota = round(int(stats['headers']['x-account-meta-quota-bytes'])/1073741824, 0)
         except KeyError:
-            quota = 'Not Defined'
+            quota = 'N/A'
         try:
             quota_used = round(int(stats['headers']['x-account-bytes-used'])/1073741824, 3)
         except KeyError:
             quota_used = 'N/A'
     return dict(quota = quota,quota_used = quota_used)
-    
+
 
 #function creates account(project), maps denovo-admins as ResellerAdmin
 def project_create(keystone, project_name, description=None):
@@ -102,7 +102,7 @@ def user_role_add(keystone,user,project):
     except:
         return False
     return True
-                          
+
 #update swift quota of the project
 def swift_update_quota(project_name,new_quota_bytes):
     sw_opt = swift_options
@@ -110,6 +110,30 @@ def swift_update_quota(project_name,new_quota_bytes):
     with SwiftService(sw_opt) as swift:
         post = swift.post(options={'meta':['quota-bytes:{}'.format(new_quota_bytes)]})
     return post['success']
+
+def swift_delete(project_name):
+    obj = 0
+    cont = 0
+    err = 0
+    success = True
+    sw_opt = swift_options
+    sw_opt['os_project_name'] = project_name
+    with SwiftService(sw_opt) as swift:
+        for delete in swift.delete(options = {'yes_all': True,}):
+            if delete['success']:
+                if delete['action'] == 'delete_object':
+                    obj = obj + 1
+                if delete['action'] == 'delete_container':
+                    cont = cont + 1
+            else:
+                err = err + 1
+                success = False
+                print('Warning! Delete error: {}'.delete)
+        result = 'Deleted objects: {}, containers: {}, errors: {}'.format(obj,cont,err)
+    if success:
+        return result
+    else:
+        return False
 
 #connect to keystone
 def keystone_connect(user,passwd):
@@ -172,6 +196,21 @@ def get_user_projects(keystone,user):
             continue
     return projects_list
 
+#update user password
+def update_password(keystone,username,new_password):
+    try:
+        user = keystone.users.find(name=username)
+    except:
+        print('No user {} found'.format(username))
+        return None
+    try:
+        user = keystone.users.update(user,password=new_password)
+    except:
+        print('could not set password for user {}. dunno why'.format(username))
+        return None
+    return user
+
+
 def menu():
     #authenticating with the keystone
     while True:
@@ -183,7 +222,7 @@ def menu():
         else:
             print('Authentication error, check your username/password')
             continue
-        
+
     #swift options
     swift_options['os_username'] = username
     swift_options['os_password'] = password
@@ -195,7 +234,8 @@ def menu():
                        '2. Manage Swift/S3 account quota\n'+
                        '3. Enable/Disable Swift/S3 account\n'+
                        '4. Delete Swift/S3 account\n'+
-                       '5. Exit script\n')
+                       '5. Reset password\n'+
+                       '6. Exit script\n')
         if choice == '0':
             print_report(projects_report(keystone))
         elif choice == '1':
@@ -218,7 +258,8 @@ def menu():
                 print('Project creation failed\n')
                 continue
             #create user if needed
-            if input('Would you lilke to create a user for {} account?\n'.format(project.name)) in ['y','Y']:
+            #if input('Would you lilke to create a user for {} account?\n'.format(project.name)) in ['y','Y']:
+            if True:
                 org_admin = input('Enter OrgAdmin username:\n')
                 report.add_row(['User name',org_admin])
                 org_admin_passwd = input('Enter OrgAdmin password (leave blank to auto-generate):\n')
@@ -249,9 +290,12 @@ def menu():
                 print('Done')
                 report.add_row(['S3 Access key', ec2_cred.access])
                 report.add_row(['S3 Secret key', ec2_cred.secret])
-                
+
             print(report)
-                      
+            with open(project.name + '.txt', 'w') as file:
+                file.write(str(report))
+
+
         elif choice == '2':
             org = input('Enter account name:\n')
             try:
@@ -265,10 +309,10 @@ def menu():
             quota = int(input('Enter new account Swift/S3 quota in Gb:\n')) * 1073741824
             print('Setting quota...\t', end='')
             if swift_update_quota(project.name, quota):
-                print('Done. Quota for {} is {} Gb.\n'.format(project.name,quota / 1073741824))
+                print('Done.\n Quota for {} is {} Gb.\n'.format(project.name,quota / 1073741824))
             else:
                 print('Fail. Something went wrong... Dunno why.')
-                
+
         elif choice == '3':
             org = input('Enter account name:\n')
             try:
@@ -312,6 +356,11 @@ def menu():
                 if input("This will remove account and all it's data.\n"+
                          "Are you sure?(yes/no)\n") in ['yes','Yes','YES']:
                     users = get_project_users(keystone,project)
+                    print('Deleting account data {}...\t'.format(project.name), end='')
+                    #delete all swift account data (containers)
+                    project.update(enabled=True)
+                    print(swift_delete(project.name))
+                    #delete project
                     print('Deleting account {}...\t'.format(project.name), end='')
                     if project.delete():
                         print('Done')
@@ -329,15 +378,33 @@ def menu():
                                 print('Done')
                 else:
                     print('Account delete canceled!')
-                                
         elif choice == '5':
+            usr = input('Enter user name:\n')
+            new_pass = getpass.getpass('New Password:\n')
+            new_pass2 = getpass.getpass('Repeat New Password:\n')
+            if new_pass == new_pass2:
+                updated_user = update_password(keystone,usr,new_pass)
+                if updated_user:
+                    if username == updated_user.name:
+                        print('Your password have been changed')
+                        input('Press Enter to exit')
+                        break
+                    else:
+                        continue
+                else:
+                    print('Could not update.')
+                    continue
+            else:
+                print('Error, passwords do not match.\n')
+                continue
+
+        elif choice == '6':
             print('Bye!')
             break
         else:
             print('Invalid choice')
             continue
- 
+
 
 if __name__ == '__main__':
     menu()
-
